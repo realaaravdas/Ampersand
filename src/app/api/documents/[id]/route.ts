@@ -7,12 +7,12 @@ import { serializeToAmp, deserializeFromAmp } from '@/lib/ampFormat';
 const DOCUMENTS_DIR = path.join(process.cwd(), 'documents');
 
 function filePath(id: string) {
-  // Sanitize id to prevent path traversal
-  const safe = id.replace(/[^a-zA-Z0-9\-]/g, '');
-  if (!safe) {
+  // Validate that id is a UUID (alphanumeric + hyphens in UUID format)
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(id)) {
     throw new Error('Invalid document ID');
   }
-  return path.join(DOCUMENTS_DIR, `${safe}.amp`);
+  return path.join(DOCUMENTS_DIR, `${id}.amp`);
 }
 
 export async function GET(

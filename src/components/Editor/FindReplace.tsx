@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { Editor } from '@tiptap/react';
 import { X, ChevronUp, ChevronDown, Replace } from 'lucide-react';
 
@@ -16,39 +16,53 @@ function buildRegex(text: string, caseSensitive: boolean): RegExp {
 }
 
 /**
- * Collect all match positions ({from, to}) in the ProseMirror document.
+ * Collect all match positions ({from, to}) by walking the ProseMirror document tree.
+ * This avoids operating on raw HTML and works safely at the node level.
  */
 function findAllMatches(editor: Editor, pattern: RegExp): Array<{ from: number; to: number }> {
-  const matches: Array<{ from: number; to: number }> = [];
+  const results: Array<{ from: number; to: number }> = [];
   editor.state.doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(node.text)) !== null) {
-      matches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
+      results.push({ from: pos + m.index, to: pos + m.index + m[0].length });
     }
   });
-  return matches;
+  return results;
+}
+
+/** Select a match in the editor and scroll it into view. */
+function selectMatch(editor: Editor, match: { from: number; to: number }) {
+  editor.chain().focus().setTextSelection({ from: match.from, to: match.to }).scrollIntoView().run();
 }
 
 export default function FindReplace({ editor, onClose }: FindReplaceProps) {
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(-1);
   const [matches, setMatches] = useState<Array<{ from: number; to: number }>>([]);
 
-  /** Recompute matches whenever find text or case sensitivity changes. */
+  /**
+   * Recompute matches and immediately jump to the first result.
+   * Returns the updated match list so callers can use it without waiting for state.
+   */
   const computeMatches = useCallback(
     (text: string, cs: boolean) => {
       if (!text) {
         setMatches([]);
-        setCurrentIndex(0);
+        setCurrentIndex(-1);
         return [];
       }
       const found = findAllMatches(editor, buildRegex(text, cs));
       setMatches(found);
-      setCurrentIndex(found.length > 0 ? 0 : -1);
+      if (found.length > 0) {
+        setCurrentIndex(0);
+        selectMatch(editor, found[0]);
+      } else {
+        setCurrentIndex(-1);
+      }
       return found;
     },
     [editor]
@@ -64,66 +78,54 @@ export default function FindReplace({ editor, onClose }: FindReplaceProps) {
     computeMatches(findText, cs);
   };
 
-  /** Jump to a match by setting the editor selection to it. */
-  const jumpTo = useCallback(
-    (idx: number, list: Array<{ from: number; to: number }>) => {
-      if (list.length === 0 || idx < 0) return;
-      const { from, to } = list[idx];
-      editor
-        .chain()
-        .focus()
-        .setTextSelection({ from, to })
-        .scrollIntoView()
-        .run();
-    },
-    [editor]
-  );
-
   const findNext = useCallback(() => {
     if (matches.length === 0) return;
     const next = (currentIndex + 1) % matches.length;
     setCurrentIndex(next);
-    jumpTo(next, matches);
-  }, [matches, currentIndex, jumpTo]);
+    selectMatch(editor, matches[next]);
+  }, [editor, matches, currentIndex]);
 
   const findPrev = useCallback(() => {
     if (matches.length === 0) return;
     const prev = (currentIndex - 1 + matches.length) % matches.length;
     setCurrentIndex(prev);
-    jumpTo(prev, matches);
-  }, [matches, currentIndex, jumpTo]);
+    selectMatch(editor, matches[prev]);
+  }, [editor, matches, currentIndex]);
 
   const replaceNext = useCallback(() => {
     if (matches.length === 0 || currentIndex < 0) return;
     const { from, to } = matches[currentIndex];
-    editor
-      .chain()
-      .focus()
-      .setTextSelection({ from, to })
-      .deleteSelection()
-      .insertContent(replaceText)
-      .run();
-    // Recompute after replacement
+    editor.chain().focus().setTextSelection({ from, to }).deleteSelection().insertContent(replaceText).run();
     const newMatches = computeMatches(findText, caseSensitive);
     const next = Math.min(currentIndex, newMatches.length - 1);
-    setCurrentIndex(next);
-    jumpTo(next, newMatches);
-  }, [matches, currentIndex, replaceText, findText, caseSensitive, editor, computeMatches, jumpTo]);
+    if (newMatches.length > 0) {
+      setCurrentIndex(next);
+      selectMatch(editor, newMatches[next]);
+    }
+  }, [editor, matches, currentIndex, replaceText, findText, caseSensitive, computeMatches]);
 
+  /**
+   * Replace all occurrences using a single ProseMirror transaction so the
+   * operation is atomic and positions stay correct (processed ascending with offset).
+   */
   const replaceAll = useCallback(() => {
     if (!findText || matches.length === 0) return;
-    const regex = buildRegex(findText, caseSensitive);
-    const html = editor.getHTML().replace(regex, replaceText);
-    editor.commands.setContent(html);
+    const sorted = [...matches].sort((a, b) => a.from - b.from);
+    const { tr, schema } = editor.state;
+    let offset = 0;
+    sorted.forEach(({ from, to }) => {
+      const af = from + offset;
+      const at = to + offset;
+      if (replaceText) {
+        tr.replaceWith(af, at, schema.text(replaceText));
+      } else {
+        tr.delete(af, at);
+      }
+      offset += replaceText.length - (to - from);
+    });
+    editor.view.dispatch(tr);
     computeMatches(findText, caseSensitive);
-  }, [findText, caseSensitive, replaceText, matches.length, editor, computeMatches]);
-
-  // Jump to first match when matches are first found
-  useEffect(() => {
-    if (matches.length > 0) {
-      jumpTo(0, matches);
-    }
-  }, [matches.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editor, findText, caseSensitive, replaceText, matches, computeMatches]);
 
   const matchLabel =
     findText && matches.length > 0
