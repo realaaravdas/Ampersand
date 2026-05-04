@@ -48,9 +48,12 @@ export default function AmpersandEditor({ document, onSave, onTitleChange }: Amp
   const isLoadingRef = useRef(false);
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4, 5, 6] },
+        link: false,
+        underline: false,
       }),
       Underline,
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
