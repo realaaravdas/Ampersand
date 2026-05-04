@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Editor } from '@tiptap/react';
 import { X, ChevronUp, ChevronDown, Replace } from 'lucide-react';
 
@@ -9,60 +9,128 @@ interface FindReplaceProps {
   onClose: () => void;
 }
 
+/** Build a case-aware regex from a literal search string. */
+function buildRegex(text: string, caseSensitive: boolean): RegExp {
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped, caseSensitive ? 'g' : 'gi');
+}
+
+/**
+ * Collect all match positions ({from, to}) in the ProseMirror document.
+ */
+function findAllMatches(editor: Editor, pattern: RegExp): Array<{ from: number; to: number }> {
+  const matches: Array<{ from: number; to: number }> = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return;
+    pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(node.text)) !== null) {
+      matches.push({ from: pos + m.index, to: pos + m.index + m[0].length });
+    }
+  });
+  return matches;
+}
+
 export default function FindReplace({ editor, onClose }: FindReplaceProps) {
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [matchCount, setMatchCount] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [matches, setMatches] = useState<Array<{ from: number; to: number }>>([]);
 
-  const getContent = useCallback(() => {
-    return editor.getText();
-  }, [editor]);
-
-  const countMatches = useCallback((text: string) => {
-    if (!text) return 0;
-    const content = getContent();
-    const flags = caseSensitive ? 'g' : 'gi';
-    const regex = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
-    return (content.match(regex) || []).length;
-  }, [getContent, caseSensitive]);
+  /** Recompute matches whenever find text or case sensitivity changes. */
+  const computeMatches = useCallback(
+    (text: string, cs: boolean) => {
+      if (!text) {
+        setMatches([]);
+        setCurrentIndex(0);
+        return [];
+      }
+      const found = findAllMatches(editor, buildRegex(text, cs));
+      setMatches(found);
+      setCurrentIndex(found.length > 0 ? 0 : -1);
+      return found;
+    },
+    [editor]
+  );
 
   const handleFindChange = (val: string) => {
     setFindText(val);
-    setMatchCount(countMatches(val));
+    computeMatches(val, caseSensitive);
   };
 
-  const findNext = () => {
-    if (!findText) return;
-    // Use browser's find API as TipTap doesn't have built-in find
-    (window as Window & { find?: (...args: unknown[]) => boolean }).find?.(findText, caseSensitive, false, true, false, false, false);
+  const handleCaseChange = (cs: boolean) => {
+    setCaseSensitive(cs);
+    computeMatches(findText, cs);
   };
 
-  const findPrev = () => {
-    if (!findText) return;
-    (window as Window & { find?: (...args: unknown[]) => boolean }).find?.(findText, caseSensitive, true, true, false, false, false);
-  };
+  /** Jump to a match by setting the editor selection to it. */
+  const jumpTo = useCallback(
+    (idx: number, list: Array<{ from: number; to: number }>) => {
+      if (list.length === 0 || idx < 0) return;
+      const { from, to } = list[idx];
+      editor
+        .chain()
+        .focus()
+        .setTextSelection({ from, to })
+        .scrollIntoView()
+        .run();
+    },
+    [editor]
+  );
 
-  const replaceNext = () => {
-    if (!findText) return;
-    const { from, to } = editor.state.selection;
-    const selectedText = editor.state.doc.textBetween(from, to);
-    const match = caseSensitive ? selectedText === findText : selectedText.toLowerCase() === findText.toLowerCase();
-    if (match) {
-      editor.chain().focus().deleteSelection().insertContent(replaceText).run();
+  const findNext = useCallback(() => {
+    if (matches.length === 0) return;
+    const next = (currentIndex + 1) % matches.length;
+    setCurrentIndex(next);
+    jumpTo(next, matches);
+  }, [matches, currentIndex, jumpTo]);
+
+  const findPrev = useCallback(() => {
+    if (matches.length === 0) return;
+    const prev = (currentIndex - 1 + matches.length) % matches.length;
+    setCurrentIndex(prev);
+    jumpTo(prev, matches);
+  }, [matches, currentIndex, jumpTo]);
+
+  const replaceNext = useCallback(() => {
+    if (matches.length === 0 || currentIndex < 0) return;
+    const { from, to } = matches[currentIndex];
+    editor
+      .chain()
+      .focus()
+      .setTextSelection({ from, to })
+      .deleteSelection()
+      .insertContent(replaceText)
+      .run();
+    // Recompute after replacement
+    const newMatches = computeMatches(findText, caseSensitive);
+    const next = Math.min(currentIndex, newMatches.length - 1);
+    setCurrentIndex(next);
+    jumpTo(next, newMatches);
+  }, [matches, currentIndex, replaceText, findText, caseSensitive, editor, computeMatches, jumpTo]);
+
+  const replaceAll = useCallback(() => {
+    if (!findText || matches.length === 0) return;
+    const regex = buildRegex(findText, caseSensitive);
+    const html = editor.getHTML().replace(regex, replaceText);
+    editor.commands.setContent(html);
+    computeMatches(findText, caseSensitive);
+  }, [findText, caseSensitive, replaceText, matches.length, editor, computeMatches]);
+
+  // Jump to first match when matches are first found
+  useEffect(() => {
+    if (matches.length > 0) {
+      jumpTo(0, matches);
     }
-    findNext();
-  };
+  }, [matches.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const replaceAll = () => {
-    if (!findText) return;
-    const html = editor.getHTML();
-    const flags = caseSensitive ? 'g' : 'gi';
-    const regex = new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
-    const newHtml = html.replace(regex, replaceText);
-    editor.commands.setContent(newHtml);
-    setMatchCount(0);
-  };
+  const matchLabel =
+    findText && matches.length > 0
+      ? `${currentIndex + 1} / ${matches.length}`
+      : findText
+      ? 'No matches'
+      : '';
 
   return (
     <div className="absolute top-2 right-4 bg-white border border-gray-200 rounded-xl shadow-2xl z-40 w-96 p-4">
@@ -94,7 +162,9 @@ export default function FindReplace({ editor, onClose }: FindReplaceProps) {
           </button>
         </div>
         {findText && (
-          <p className="text-xs text-gray-500">{matchCount} match{matchCount !== 1 ? 'es' : ''} found</p>
+          <p className={`text-xs ${matches.length === 0 ? 'text-red-500' : 'text-gray-500'}`}>
+            {matchLabel}
+          </p>
         )}
         <input
           type="text"
@@ -108,7 +178,7 @@ export default function FindReplace({ editor, onClose }: FindReplaceProps) {
             <input
               type="checkbox"
               checked={caseSensitive}
-              onChange={(e) => setCaseSensitive(e.target.checked)}
+              onChange={(e) => handleCaseChange(e.target.checked)}
               className="rounded"
             />
             Case sensitive
@@ -117,13 +187,15 @@ export default function FindReplace({ editor, onClose }: FindReplaceProps) {
         <div className="flex gap-2">
           <button
             onClick={replaceNext}
-            className="flex-1 px-3 py-1.5 text-xs border border-gray-300 rounded hover:bg-gray-50"
+            disabled={matches.length === 0}
+            className="flex-1 px-3 py-1.5 text-xs border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
           >
             Replace
           </button>
           <button
             onClick={replaceAll}
-            className="flex-1 px-3 py-1.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700"
+            disabled={matches.length === 0}
+            className="flex-1 px-3 py-1.5 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
           >
             Replace All
           </button>
