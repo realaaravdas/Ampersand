@@ -46,6 +46,8 @@ export default function AmpersandEditor({ document, onSave, onTitleChange }: Amp
   const [titleValue, setTitleValue] = useState(document?.title || 'Untitled Document');
   const titleInputRef = useRef<HTMLInputElement>(null);
   const isLoadingRef = useRef(false);
+  // Use a ref so the onUpdate callback always calls the latest triggerSave
+  const triggerSaveRef = useRef<(() => void) | null>(null);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -78,9 +80,9 @@ export default function AmpersandEditor({ document, onSave, onTitleChange }: Amp
         spellcheck: 'true',
       },
     },
-    onUpdate: ({ editor: e }) => {
+    onUpdate: () => {
       if (!isLoadingRef.current) {
-        triggerSave();
+        triggerSaveRef.current?.();
       }
     },
   });
@@ -95,6 +97,11 @@ export default function AmpersandEditor({ document, onSave, onTitleChange }: Amp
   }, [editor, document, onSave]);
 
   const { triggerSave } = useAutosave(performSave, setSaveStatus, 2000);
+
+  // Keep the ref in sync with the latest triggerSave function
+  useEffect(() => {
+    triggerSaveRef.current = triggerSave;
+  }, [triggerSave]);
 
   // Reload content when doc changes
   useEffect(() => {
