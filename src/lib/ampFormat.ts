@@ -43,17 +43,21 @@ export function exportToHtml(content: string, title: string): string {
 }
 
 export function exportToText(htmlContent: string): string {
-  // Strip HTML tags for plain text export
-  return htmlContent
+  // Strip HTML tags for plain text export using safe sequential approach
+  const withNewlines = htmlContent
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/h[1-6]>/gi, '\n\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+    .replace(/<\/li>/gi, '\n');
+  // Strip all remaining HTML tags
+  const noTags = withNewlines.replace(/<[^>]+>/g, '');
+  // Decode HTML entities in a fixed order (most specific to least)
+  const decoded = noTags
     .replace(/&nbsp;/g, ' ')
     .replace(/&quot;/g, '"')
-    .trim();
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  return decoded.trim();
 }

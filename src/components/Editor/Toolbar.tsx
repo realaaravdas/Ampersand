@@ -20,11 +20,6 @@ interface ToolbarProps {
 
 const FONT_FAMILIES = ['Arial', 'Times New Roman', 'Georgia', 'Courier New', 'Verdana', 'Helvetica', 'Trebuchet MS'];
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 42, 48, 56, 64, 72, 96];
-const HEADINGS = [
-  { level: 1, label: 'Heading 1' },
-  { level: 2, label: 'Heading 2' },
-  { level: 3, label: 'Heading 3' },
-];
 
 const TEXT_COLORS = [
   '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc',

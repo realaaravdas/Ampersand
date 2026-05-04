@@ -17,6 +17,13 @@ export default function LinkDialog({ editor, onClose }: LinkDialogProps) {
   const apply = () => {
     if (!url) {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
+    } else if (!prevUrl && text) {
+      // Insert new link with custom display text
+      editor
+        .chain()
+        .focus()
+        .insertContent(`<a href="${url}" target="_blank">${text}</a>`)
+        .run();
     } else {
       editor.chain().focus().extendMarkRange('link').setLink({ href: url, target: '_blank' }).run();
     }
